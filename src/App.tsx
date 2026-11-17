@@ -1,11 +1,13 @@
 import React from 'react';
 import { MineProvider, useMine } from './context/MineContext';
+import { LoginPage } from './components/auth/LoginPage';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
 import { DemoControlModal } from './components/common/DemoControlModal';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { NodeDetailDrawer } from './components/common/NodeDetailDrawer';
 import { AddNodeModal } from './components/common/AddNodeModal';
+import { HardwareStreamModal } from './components/common/HardwareStreamModal';
 
 import { OverviewView } from './components/views/OverviewView';
 import { DigitalTwinView } from './components/views/DigitalTwinView';
@@ -20,7 +22,12 @@ import { ReportsView } from './components/views/ReportsView';
 import { SettingsView } from './components/views/SettingsView';
 
 const MainContent: React.FC = () => {
-  const { activeView } = useMine();
+  const { activeView, isAuthenticated } = useMine();
+
+  // If not logged in, display the functional Login Page
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0b0f17]">
@@ -53,6 +60,7 @@ const MainContent: React.FC = () => {
       <NotificationDrawer />
       <NodeDetailDrawer />
       <AddNodeModal />
+      <HardwareStreamModal />
     </div>
   );
 };

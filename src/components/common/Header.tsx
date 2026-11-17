@@ -14,7 +14,9 @@ import {
   Play, 
   Pause,
   User,
-  ExternalLink
+  ExternalLink,
+  Cpu,
+  LogOut
 } from 'lucide-react';
 import { UserRole } from '../../types';
 
@@ -34,7 +36,10 @@ export const Header: React.FC = () => {
     setIsDemoModalOpen,
     setIsNotificationDrawerOpen,
     setActiveNodeId,
-    setActiveView
+    setActiveView,
+    isHardwareConnected,
+    setIsHardwareModalOpen,
+    logout
   } = useMine();
 
   const [currentTime, setCurrentTime] = useState<string>('');
@@ -119,7 +124,7 @@ export const Header: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setIsSearchFocused(true)}
-            placeholder="Search nodes, zones, alerts (e.g. NODE-SL-01, Zone A)..."
+            placeholder="Search nodes, zones, alerts (e.g. NODE-SL-01, ESP32, Zone A)..."
             className="w-full bg-[#141d33] border border-slate-700/80 rounded-lg pl-9 pr-4 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 transition-all"
           />
           {searchQuery && (
@@ -188,8 +193,23 @@ export const Header: React.FC = () => {
         )}
       </div>
 
-      {/* Right Controls: Demo Mode, Notifications, User Switcher */}
-      <div className="flex items-center space-x-3">
+      {/* Right Controls: Hardware Gateway, Demo Mode, Notifications, User Switcher */}
+      <div className="flex items-center space-x-2.5">
+        {/* ESP32 Physical Hardware Button */}
+        <button
+          onClick={() => setIsHardwareModalOpen(true)}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all shadow-sm group ${
+            isHardwareConnected
+              ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300 hover:border-emerald-400'
+              : 'bg-gradient-to-r from-cyan-950/80 to-slate-900 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
+          }`}
+          title="Connect ESP32 Physical Sensor Node via USB Serial / WiFi"
+        >
+          <Cpu className={`w-4 h-4 ${isHardwareConnected ? 'text-emerald-400 animate-pulse' : 'text-cyan-400 group-hover:rotate-12 transition-transform'}`} />
+          <span className="font-bold">{isHardwareConnected ? 'ESP32 Live' : 'ESP32 Node'}</span>
+          <span className={`w-2 h-2 rounded-full ${isHardwareConnected ? 'bg-emerald-400 animate-ping' : 'bg-cyan-400'}`}></span>
+        </button>
+
         {/* Demo Mode Button / Pill */}
         <button
           onClick={() => setIsDemoModalOpen(true)}
@@ -209,9 +229,9 @@ export const Header: React.FC = () => {
                 activeScenario === 'network_battery_failure' ? 'bg-amber-500' : 'bg-emerald-500'
               }`}></span>
             </span>
-            <span className="font-bold tracking-wider uppercase text-[10px]">Demo Scenario:</span>
+            <span className="font-bold tracking-wider uppercase text-[10px]">Scenario:</span>
           </div>
-          <span className="text-white capitalize font-semibold max-w-[110px] sm:max-w-none truncate">
+          <span className="text-white capitalize font-semibold max-w-[100px] sm:max-w-none truncate">
             {activeScenario.replace(/_/g, ' ')}
           </span>
           <span className="text-[10px] font-mono px-1.5 py-0.2 bg-cyan-900/60 rounded text-cyan-200">
@@ -291,6 +311,19 @@ export const Header: React.FC = () => {
                   </div>
                 </button>
               ))}
+
+              <div className="pt-1 mt-1 border-t border-slate-800">
+                <button
+                  onClick={() => {
+                    setIsRoleDropdownOpen(false);
+                    logout();
+                  }}
+                  className="w-full text-left px-3 py-2 flex items-center space-x-2 text-red-400 hover:bg-red-950/30 rounded transition-colors text-xs font-semibold"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out / Switch Operator</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

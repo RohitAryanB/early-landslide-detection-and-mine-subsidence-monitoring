@@ -50,6 +50,44 @@ function generateHistory(
 }
 
 export const INITIAL_NODES: SensorNode[] = [
+  // --- REAL PHYSICAL HARDWARE NODE (ESP32 Multi-Transducer) ---
+  {
+    id: 'ESP32-HARDWARE-01',
+    name: 'ESP32 Physical Field Node #1 (Live Hardware)',
+    category: 'slope',
+    zone: 'Zone A',
+    zoneName: 'North Overburden Dump (Bench 2)',
+    status: 'normal',
+    health: 100,
+    battery: 88,
+    signalRssi: -65,
+    snr: 9.8,
+    packetLoss: 0.1,
+    latency: 35,
+    lastCommunication: 'Live USB/LoRa Link',
+    position3D: [-26, 11, -30],
+    geoCoords: [22.3320, 82.6845],
+    elevation: 262,
+    parentGatewayId: 'GW-ALPHA',
+    isHardwareNode: true,
+    hardwareRawPacket: 'BAT:3.92,VIB:0,RAIN:1,SOIL:2100,POT:1250,AZ:9.80,ALERT:0',
+    measurements: {
+      tiltAngle: 0.85,
+      vibration: 0.20,
+      displacement: 12.5,
+      crackWidth: 3.2,
+      soilMoisture: 28.5,
+      porePressure: 15.2,
+      rainfallRate: 0.0,
+      temperature: 28.0,
+      batteryVoltage: 3.92,
+      batteryPercentage: 88,
+      solarChargingCurrent: 210
+    },
+    history: generateHistory(0.85, 0.20, 12.5, 3.2, 28.5, 15.2, 0.0, 88),
+    aiRiskContribution: 30
+  },
+
   // --- ZONE A: North Overburden Dump (Landslide Risk) ---
   {
     id: 'NODE-SL-01',

@@ -45,7 +45,7 @@ export interface NodeHistoricalSample {
 }
 
 export interface SensorNode {
-  id: string; // e.g. "NODE-SB-01", "NODE-SL-05"
+  id: string; // e.g. "NODE-SB-01", "NODE-SL-05", "ESP32-HARDWARE-01"
   name: string;
   category: NodeCategory;
   zone: string; // "Zone A", "Zone B", etc.
@@ -67,6 +67,24 @@ export interface SensorNode {
   anomalyFlag?: string; // e.g. "Rapid acceleration", "High pore pressure"
   maintenanceFlag?: string;
   aiRiskContribution: number; // 0 - 100 score contribution
+  isHardwareNode?: boolean; // Flag for physical ESP32 node
+  hardwareRawPacket?: string;
+}
+
+export interface HardwareTelemetryPayload {
+  batteryV?: number;
+  vibration?: number;
+  slidePotVal?: number;
+  soilAnalog?: number;
+  rainDigital?: number;
+  rainAnalog?: number;
+  accelX?: number;
+  accelY?: number;
+  accelZ?: number;
+  alert?: number;
+  rawString?: string;
+  source?: 'usb_serial' | 'lora_gateway' | 'http_wifi' | 'manual_test';
+  receivedAt?: string;
 }
 
 export type AlertSeverity = 'info' | 'low' | 'moderate' | 'high' | 'critical';

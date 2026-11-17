@@ -9,7 +9,8 @@ import {
   UserRole,
   UserProfile,
   RiskSeverity,
-  NodeStatus
+  NodeStatus,
+  HardwareTelemetryPayload
 } from '../types';
 import {
   INITIAL_SITE_CONFIG,
@@ -59,6 +60,20 @@ interface MineContextType {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   
+  // Authentication
+  isAuthenticated: boolean;
+  login: (username: string, pass: string) => boolean;
+  logout: () => void;
+
+  // Real Hardware ESP32 Integration
+  isHardwareConnected: boolean;
+  hardwareTelemetry: HardwareTelemetryPayload | null;
+  isHardwareModalOpen: boolean;
+  setIsHardwareModalOpen: (open: boolean) => void;
+  ingestHardwareData: (payload: HardwareTelemetryPayload) => void;
+  connectWebSerial: () => Promise<boolean>;
+  disconnectWebSerial: () => void;
+
   // Modals & Panels
   isDemoModalOpen: boolean;
   setIsDemoModalOpen: (open: boolean) => void;
@@ -112,7 +127,21 @@ const USER_PROFILES: Record<UserRole, UserProfile> = {
   viewer: { name: 'Observer Guest', role: 'viewer', title: 'Auditor / Industry Guest', avatar: '👁️' },
 };
 
+const CREDENTIALS_MAP: Record<string, { pass: string; role: UserRole }> = {
+  manager: { pass: 'mineguard2026', role: 'mine_manager' },
+  safety: { pass: 'mineguard2026', role: 'safety_officer' },
+  technician: { pass: 'mineguard2026', role: 'field_technician' },
+  analyst: { pass: 'mineguard2026', role: 'analyst' },
+  admin: { pass: 'mineguard2026', role: 'admin' },
+  guest: { pass: 'guest123', role: 'viewer' }
+};
+
 export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('mineguard_auth') === 'true';
+  });
+
   // Load from localStorage or default
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => {
     const saved = localStorage.getItem('mineguard_site_config');
@@ -142,13 +171,25 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activeScenario, setActiveScenario] = useState<ScenarioPreset>('subsidence_event');
   const [isSimulating, setIsSimulating] = useState<boolean>(true);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(1);
-  const [timelineIndex, setTimelineIndex] = useState<number>(24); // 0 to 24 (24 is current/latest)
+  const [timelineIndex, setTimelineIndex] = useState<number>(24);
   const [isPlayingTimeline, setIsPlayingTimeline] = useState<boolean>(false);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewType>('overview');
-  const [currentUser, setCurrentUser] = useState<UserProfile>(USER_PROFILES.mine_manager);
+  
+  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
+    const savedRole = localStorage.getItem('mineguard_role') as UserRole;
+    return (savedRole && USER_PROFILES[savedRole]) ? USER_PROFILES[savedRole] : USER_PROFILES.mine_manager;
+  });
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [nodeFilterPreset, setNodeFilterPreset] = useState<{ status?: NodeStatus; zone?: string; category?: string; lowBattery?: boolean } | null>(null);
+
+  // Hardware State & Refs
+  const [isHardwareConnected, setIsHardwareConnected] = useState<boolean>(false);
+  const [hardwareTelemetry, setHardwareTelemetry] = useState<HardwareTelemetryPayload | null>(null);
+  const [isHardwareModalOpen, setIsHardwareModalOpen] = useState(false);
+  const serialPortRef = useRef<any>(null);
+  const serialReaderRef = useRef<any>(null);
 
   // Modals
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
@@ -176,7 +217,28 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('mineguard_airisk', JSON.stringify(aiRisk));
   }, [aiRisk]);
 
-  // Recalculate AI Risk and Node Health dynamically from current measurements
+  // Auth Methods
+  const login = (username: string, pass: string): boolean => {
+    const cleanUser = username.trim().toLowerCase();
+    const cleanPass = pass.trim();
+
+    if (CREDENTIALS_MAP[cleanUser] && CREDENTIALS_MAP[cleanUser].pass === cleanPass) {
+      const role = CREDENTIALS_MAP[cleanUser].role;
+      setCurrentUser(USER_PROFILES[role]);
+      setIsAuthenticated(true);
+      localStorage.setItem('mineguard_auth', 'true');
+      localStorage.setItem('mineguard_role', role);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('mineguard_auth');
+  };
+
+  // Recalculate AI Risk and Node Health dynamically
   const evaluateDynamicRiskAndHealth = (currentNodes: SensorNode[]) => {
     const activeNodes = currentNodes.filter(n => n.status !== 'offline');
     if (activeNodes.length === 0) return;
@@ -203,7 +265,6 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
       : 1;
     const maxRain = Math.max(...activeNodes.map(n => n.measurements.rainfallRate));
 
-    // Calculate score 0-100
     const calculatedSubScore = Math.min(98, Math.max(12, Math.round((avgSubDisp / 70) * 55 + (maxSubTilt / 4) * 35 + 10)));
     const calculatedLandslideScore = Math.min(99, Math.max(15, Math.round((avgPorePress / 35) * 40 + (avgMoisture / 45) * 30 + (maxCrack / 15) * 20 + (maxRain / 25) * 10)));
 
@@ -225,6 +286,245 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }));
   };
 
+  // Real Physical ESP32 Hardware Ingestion Engine
+  const ingestHardwareData = (payload: HardwareTelemetryPayload) => {
+    setHardwareTelemetry(payload);
+    setIsHardwareConnected(true);
+
+    setNodes(prev => {
+      return prev.map(node => {
+        if (node.id === 'ESP32-HARDWARE-01') {
+          const m = { ...node.measurements };
+
+          // 1. Battery Voltage & Percentage (Pin D34)
+          if (payload.batteryV !== undefined && payload.batteryV > 0) {
+            m.batteryVoltage = +payload.batteryV.toFixed(2);
+            m.batteryPercentage = Math.round(Math.min(100, Math.max(5, ((payload.batteryV - 3.2) / 1.0) * 100)));
+          }
+
+          // 2. Vibration (Pin D27)
+          if (payload.vibration !== undefined) {
+            m.vibration = payload.vibration === 1 ? 8.45 : 0.18;
+          }
+
+          // 3. Slide Potentiometer -> Displacement & Crack (Pin D35)
+          if (payload.slidePotVal !== undefined) {
+            // 0 - 4095 mapped to 0 - 50 mm displacement
+            m.displacement = +((payload.slidePotVal / 4095.0) * 50.0).toFixed(2);
+            m.crackWidth = +((payload.slidePotVal / 4095.0) * 18.0).toFixed(2);
+          }
+
+          // 4. Soil Moisture (Pin VP/GPIO36)
+          if (payload.soilAnalog !== undefined) {
+            // 4095 is bone dry, ~1000 is saturated
+            const dryScale = Math.min(4095, Math.max(1000, payload.soilAnalog));
+            m.soilMoisture = +(((4095 - dryScale) / 3095.0) * 45.0 + 10.0).toFixed(1);
+            m.porePressure = +(((4095 - dryScale) / 3095.0) * 35.0 + 5.0).toFixed(1);
+          }
+
+          // 5. Rain Detector (Pin D4 & D39)
+          if (payload.rainDigital !== undefined) {
+            // In typical rain comparator boards: LOW (0) = Rain detected!
+            if (payload.rainDigital === 0) {
+              m.rainfallRate = payload.rainAnalog !== undefined 
+                ? +(((4095 - payload.rainAnalog) / 4095.0) * 50.0 + 10.0).toFixed(1)
+                : 35.0;
+            } else {
+              m.rainfallRate = 0.0;
+            }
+          }
+
+          // 6. MPU6050 Accel / Tilt Angle (I2C D21/D22)
+          if (payload.accelZ !== undefined) {
+            const az = Math.abs(payload.accelZ);
+            const ax = payload.accelX || 0;
+            const ay = payload.accelY || 0;
+            const horizontal = Math.hypot(ax, ay);
+            // Tilt from vertical
+            m.tiltAngle = +(Math.atan2(horizontal > 0 ? horizontal : Math.sqrt(Math.max(0, 96 - az * az)), az) * 180 / Math.PI).toFixed(2);
+          }
+
+          // Determine Status based on actual hardware thresholds
+          let newStatus: NodeStatus = 'normal';
+          let anomaly: string | undefined = undefined;
+
+          if (payload.alert === 1 || m.vibration > 6 || m.displacement > 35 || m.porePressure > 32 || payload.rainDigital === 0) {
+            newStatus = 'critical';
+            anomaly = `ESP32 Alarm: ${m.vibration > 6 ? 'Excessive Vibration' : m.rainfallRate > 0 ? 'Torrential Rain' : 'Displacement Spike'}`;
+          } else if (m.displacement > 15 || m.tiltAngle > 1.8 || m.batteryPercentage < 30) {
+            newStatus = 'warning';
+          }
+
+          // Trigger Alert Incident if Critical and not already active
+          if (newStatus === 'critical') {
+            const alertId = `ALT-HW-${Date.now().toString().slice(-4)}`;
+            const newAlert: AlertIncident = {
+              id: alertId,
+              title: `Live Hardware Alert: ESP32 Node Exceeded Critical Thresholds`,
+              description: `Physical ESP32 node reports ${m.displacement}mm displacement, ${m.vibration}mm/s vibration, and ${m.porePressure}kPa pore pressure.`,
+              category: 'landslide',
+              severity: 'critical',
+              timestamp: 'Just now',
+              nodeId: 'ESP32-HARDWARE-01',
+              zone: 'Zone A',
+              acknowledged: false,
+              status: 'active',
+              recommendedAction: 'Verify physical breadboard sensors; inspect crown berm perimeter on North OB Dump.',
+              restrictedZoneId: 'zone-a'
+            };
+            setAlerts(a => [newAlert, ...a.slice(0, 15)]);
+          }
+
+          // Append to history
+          const newHist = [...node.history];
+          if (newHist.length > 0) {
+            newHist[newHist.length - 1] = {
+              timestamp: new Date().toISOString(),
+              tilt: m.tiltAngle,
+              vibration: m.vibration,
+              displacement: m.displacement,
+              crackWidth: m.crackWidth,
+              soilMoisture: m.soilMoisture,
+              porePressure: m.porePressure,
+              rainfall: m.rainfallRate,
+              battery: m.batteryPercentage
+            };
+          }
+
+          return {
+            ...node,
+            status: newStatus,
+            battery: m.batteryPercentage,
+            measurements: m,
+            anomalyFlag: anomaly,
+            history: newHist,
+            lastCommunication: `Live Hardware Telemetry (${new Date().toLocaleTimeString()})`,
+            hardwareRawPacket: payload.rawString || node.hardwareRawPacket
+          };
+        }
+        return node;
+      });
+    });
+
+    // Also re-evaluate dynamic risk immediately
+    setNodes(current => {
+      evaluateDynamicRiskAndHealth(current);
+      return current;
+    });
+  };
+
+  // Serial Line Parser (Parses both LoRa packet line and Serial monitor print lines)
+  const parseAndIngestSerialLine = (line: string) => {
+    if (!line) return;
+
+    // Format A: LoRa Compact Packet (e.g. BAT:3.92,VIB:0,RAIN:1,SOIL:2100,POT:1250,AZ:9.80,ALERT:0)
+    if (line.includes('BAT:') && line.includes('VIB:')) {
+      const data: HardwareTelemetryPayload = { source: 'usb_serial', rawString: line };
+      const tokens = line.split(',');
+      for (const t of tokens) {
+        const [k, v] = t.split(':');
+        if (k && v) {
+          const val = parseFloat(v.trim());
+          if (!isNaN(val)) {
+            const key = k.trim().toUpperCase();
+            if (key === 'BAT') data.batteryV = val;
+            else if (key === 'VIB') data.vibration = Math.round(val);
+            else if (key === 'RAIN') data.rainDigital = Math.round(val);
+            else if (key === 'SOIL') data.soilAnalog = Math.round(val);
+            else if (key === 'POT') data.slidePotVal = Math.round(val);
+            else if (key === 'AZ') data.accelZ = val;
+            else if (key === 'ALERT') data.alert = Math.round(val);
+          }
+        }
+      }
+      ingestHardwareData(data);
+      return;
+    }
+
+    // Format B: Multi-line Serial Monitor text
+    if (line.includes('Slide pot:') || line.includes('Vibration:') || line.includes('Soil AO:') || line.includes('Rain DO:') || line.includes('Battery:')) {
+      // Create partial update
+      const data: HardwareTelemetryPayload = { source: 'usb_serial', rawString: line };
+      const mPot = line.match(/Slide pot:\s*(\d+)/);
+      if (mPot) data.slidePotVal = parseInt(mPot[1]);
+
+      const mVib = line.match(/Vibration:\s*(\d+)/);
+      if (mVib) data.vibration = parseInt(mVib[1]);
+
+      const mSoil = line.match(/Soil AO:\s*(\d+)/);
+      if (mSoil) data.soilAnalog = parseInt(mSoil[1]);
+
+      const mRain = line.match(/Rain DO:\s*(\d+)/);
+      if (mRain) data.rainDigital = parseInt(mRain[1]);
+
+      const mBatt = line.match(/Battery:\s*([\d\.]+)V/);
+      if (mBatt) data.batteryV = parseFloat(mBatt[1]);
+
+      ingestHardwareData(data);
+    }
+  };
+
+  // Web Serial API Connector
+  const connectWebSerial = async (): Promise<boolean> => {
+    if (!('serial' in navigator)) {
+      alert('Web Serial API is not supported in this browser. Please use Google Chrome or Edge, or run: python3 serial_bridge.py /dev/ttyUSB0');
+      return false;
+    }
+
+    try {
+      const port = await (navigator as any).serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      serialPortRef.current = port;
+      setIsHardwareConnected(true);
+
+      const textDecoder = new (window as any).TextDecoderStream();
+      port.readable.pipeTo(textDecoder.writable);
+      const reader = textDecoder.readable.getReader();
+      serialReaderRef.current = reader;
+
+      let buffer = '';
+      (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+              buffer += value;
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                parseAndIngestSerialLine(line.trim());
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Serial stream closed:', err);
+        } finally {
+          setIsHardwareConnected(false);
+        }
+      })();
+
+      return true;
+    } catch (err) {
+      console.error('Serial connection error:', err);
+      return false;
+    }
+  };
+
+  const disconnectWebSerial = async () => {
+    try {
+      if (serialReaderRef.current) {
+        await serialReaderRef.current.cancel();
+      }
+      if (serialPortRef.current) {
+        await serialPortRef.current.close();
+      }
+    } catch (e) {
+      // quiet
+    }
+    setIsHardwareConnected(false);
+  };
+
   // Continuous Simulation Tick Engine
   useEffect(() => {
     if (!isSimulating) return;
@@ -237,16 +537,16 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return node;
           }
 
-          // Subtle realistic noise
-          const m = node.measurements;
-          const noiseFactor = (Math.random() - 0.49) * 0.05;
+          // If this is the real physical ESP32 node and live hardware is connected, keep its real reading!
+          if (node.isHardwareNode && isHardwareConnected) {
+            return node;
+          }
 
-          // Battery drain or solar recharge depending on solar current
-          const netPower = m.solarChargingCurrent - 120; // mA
+          const m = node.measurements;
+          const netPower = m.solarChargingCurrent - 120;
           const newBatteryPct = Math.min(100, Math.max(5, +(m.batteryPercentage + (netPower > 0 ? 0.04 : -0.05) * simulationSpeed).toFixed(1)));
           const newBatteryVoltage = +(3.2 + (newBatteryPct / 100) * 1.0).toFixed(2);
 
-          // Sensor drift depending on scenario
           let newDisp = m.displacement;
           let newTilt = m.tiltAngle;
           let newCrack = m.crackWidth;
@@ -269,7 +569,6 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          // Determine node status
           let newStatus: NodeStatus = 'normal';
           if (newDisp > 50 || newTilt > 3.5 || newCrack > 14 || newPore > 35 || m.batteryPercentage < 20) {
             newStatus = 'critical';
@@ -277,7 +576,6 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
             newStatus = 'warning';
           }
 
-          // Update latest history entry
           const newHistory = [...node.history];
           if (newHistory.length > 0) {
             const lastSample = newHistory[newHistory.length - 1];
@@ -311,7 +609,7 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
               batteryVoltage: newBatteryVoltage
             },
             history: newHistory,
-            lastCommunication: 'Just now'
+            lastCommunication: node.isHardwareNode ? node.lastCommunication : 'Just now'
           };
         });
 
@@ -321,7 +619,7 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, intervalTime);
 
     return () => clearInterval(interval);
-  }, [isSimulating, simulationSpeed, activeScenario]);
+  }, [isSimulating, simulationSpeed, activeScenario, isHardwareConnected]);
 
   // Timeline playback loop
   useEffect(() => {
@@ -354,6 +652,7 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const restoreNormalConditions = () => {
     setNodes(prev => prev.map(n => {
+      if (n.isHardwareNode) return n;
       const isGateway = n.category === 'gateway_relay';
       return {
         ...n,
@@ -442,7 +741,6 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }));
 
-    // Add alert
     const newAlert: AlertIncident = {
       id: `ALT-${Date.now().toString().slice(-4)}`,
       title: 'Monsoon Torrential Rain & Slope Pore-Pressure Spikes',
@@ -523,7 +821,6 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const triggerNetworkBatteryFailure = () => {
     setNodes(prev => prev.map((n, idx) => {
-      // simulate 5 nodes experiencing severe issues
       if (idx % 6 === 2) {
         return {
           ...n,
@@ -743,6 +1040,7 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const setUserRole = (role: UserRole) => {
     setCurrentUser(USER_PROFILES[role]);
+    localStorage.setItem('mineguard_role', role);
   };
 
   const navigateToFilteredNodes = (filter: { status?: NodeStatus; zone?: string; category?: string; lowBattery?: boolean }) => {
@@ -777,6 +1075,16 @@ export const MineProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUserRole,
         searchQuery,
         setSearchQuery,
+        isAuthenticated,
+        login,
+        logout,
+        isHardwareConnected,
+        hardwareTelemetry,
+        isHardwareModalOpen,
+        setIsHardwareModalOpen,
+        ingestHardwareData,
+        connectWebSerial,
+        disconnectWebSerial,
         isDemoModalOpen,
         setIsDemoModalOpen,
         isNotificationDrawerOpen,
